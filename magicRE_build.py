@@ -1,6 +1,8 @@
 from collections import defaultdict
 from pathlib import Path
 from multiprocessing import Pool
+import subprocess
+import shlex
 
 
 def parse_repeatmasker(annotation_file):
@@ -147,7 +149,8 @@ def generate_pseudogenomes(genome_fasta, outfile, flank_length, spacer_size, rep
 
 def create_magicDB(pseudogenome_fasta):
     """Create a magic-BLAST db from the pseudogenome fasta file"""
-    pass
+    db_cmd = f'makeblastdb -in {pseudogenome_fasta} -dbtype nucl -parse_seqids -out pseudogenome -title "Pseudogenome_db"'
+    subprocess.run(shlex.split(db_cmd))
 
 
 def main():
@@ -169,7 +172,7 @@ def main():
     threads = args.threads
     is_bed = args.isBed
 
-    pseudo_genome_fasta = Path(setup_folder, "pseudogenome.fasta")
+    pseudo_genome_fasta = Path(".", "pseudogenome.fasta")
     create_setup_dir(setup_folder)
     repeat_data = process_annotation(annotation_file, setup_folder, is_bed)
     generate_pseudogenomes(genome_fasta, pseudo_genome_fasta, flank_length, gap_length, repeat_data, threads)
