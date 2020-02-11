@@ -1,11 +1,22 @@
+import subprocess
+import shlex
+import argparse
 from collections import defaultdict
 from pathlib import Path
 from multiprocessing import Pool
-import subprocess
-import shlex
+
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio.Alphabet import IUPAC
 
 
-def parse_repeatmasker(annotation_file):
+def dd():
+    """Create module-level defaultdict that is pickle-able"""
+    return defaultdict(list)
+
+
+def parse_repeatmasker(annotation_file, outdir):
     """Extract information for repnames.bed file from repeatmasker input"""
     repeat_data = defaultdict(dd)
     name_idx, chrom_idx, start_idx, end_idx, class_fam_idx = 9, 4, 5, 6, 10
@@ -34,6 +45,8 @@ def parse_repeatmasker(annotation_file):
                 except:
                     class_ = class_family    # make the class and family names the same
                     family = class_family    # for Simple_repeats, Low_complexity, etc.
+
+                outfile.write(f"{chrom}\t{start}\t{end}\t{name}\t{class_}\t{family}\n")
                 
                 repeat_data[name]["start"].append(start)
                 repeat_data[name]["end"].append(end)
@@ -47,7 +60,7 @@ def parse_repeatmasker(annotation_file):
     return repeat_data
 
 
-def parse_bedfile(annotation_file):
+def parse_bedfile(annotation_file, outdir):
     """Extract information for repnames.bed file from bedfile input"""
     name_idx, chrom_idx, start_idx, end_idx, class_idx, family_idx = 3, 0, 1, 2, 4, 5
     repeat_data = defaultdict(dd)
@@ -64,6 +77,8 @@ def parse_bedfile(annotation_file):
                 class_ = l[class_idx]
                 family = l[family_idx]
                 
+                outfile.write(f"{chrom}\t{start}\t{end}\t{name}\t{class_}\t{family}\n")
+
                 repeat_data[name]["start"].append(start)
                 repeat_data[name]["end"].append(end)
                 repeat_data[name]["count"].append(chrom)
@@ -76,16 +91,16 @@ def parse_bedfile(annotation_file):
     return repeat_data
 
 
-def process_annotation(annotation_file, is_bed):
+def process_annotation(annotation_file, is_bed, outdir):
     """Extract the repeat name and information from annotation file"""
     print(f"Processing the annotation file : {annotation_file}...")
 
     if not is_bed:
         print(f"\t{annotation_file} is set to repeat masker format.")
-        data = parse_repeatmasker(annotation_file)
+        data = parse_repeatmasker(annotation_file, outdir)
     else:
         print(f"\t{annotation_file} is set to bedfile format.")
-        data = parse_bedfile(annotation_file)
+        data = parse_bedfile(annotation_file, outdir)
     
     print(f"Finished processing {annotation_file}.")
     
@@ -134,10 +149,8 @@ def generate_pseudogenomes(genome_fasta, outfile, flank_length, spacer_size, rep
     flanks = [flank_length for _ in range(len(repeats))]
     spacers = [spacer_size for _ in range(len(repeats))]
 
-    # zip all arguments together into iterable
     args = list(zip(genomes, dicts, repeats, flanks, spacers))
 
-    # Multiprocess each repeat instance
     with Pool(processes=threads) as pool:
         results = pool.starmap_async(generate_chromosome, args)
         records = results.get()
@@ -147,9 +160,10 @@ def generate_pseudogenomes(genome_fasta, outfile, flank_length, spacer_size, rep
     print("Done.")
 
 
-def create_magicDB(pseudogenome_fasta):
+def create_magicDB(pseudogenome_fasta, outdir):
     """Create a magic-BLAST db from the pseudogenome fasta file"""
-    db_cmd = f'makeblastdb -in {pseudogenome_fasta} -dbtype nucl -parse_seqids -out pseudogenome -title "Pseudogenome_db"'
+    db_out = Path(outdir, "pseudogenome")
+    db_cmd = f'makeblastdb -in {pseudogenome_fasta} -dbtype nucl -parse_seqids -out {db_out} -title "pseudogenome"'
     subprocess.run(shlex.split(db_cmd))
 
 
@@ -158,6 +172,7 @@ def main():
     parser.add_argument('--version', action='version', version='%(prog)s 0.1')
     parser.add_argument('annotationFile', help='The annotation file that contains repeat masker annotation for the genome of interest and may be downloaded at RepeatMasker.org. Example: hg38.fa.out. Custom bed files are also accepted.')
     parser.add_argument('genomeFasta', help='File name and path for genome of interest in fasta format. Example: /data/hg38.fa')
+    parser.add_argument('--setupDir', default="MagicRE_Setup", metavar="MagicRE_Setup", help='Location to save the pseudogenome BLAST database')
     parser.add_argument('--threads', default=1, type=int, metavar='1', help='Number of cores to be used for STAR index building.')
     parser.add_argument('--gapLength', default=200, type=int, metavar='200', help='Length of the spacer used to build repeat psuedogeneomes.')
     parser.add_argument('--flankLength', default=25, type=int, metavar='25', help='Length of the flanking region adjacent to the repeat element that is used to build repeat psuedogenomes. The flanking length should be set according to the length of your reads.')
@@ -169,14 +184,17 @@ def main():
     flank_length = args.flankLength 
     annotation_file = args.annotationFile
     genome_fasta = args.genomeFasta
+    setup_dir = args.setupDir
     threads = args.threads
     is_bed = args.isBed
 
-    pseudo_genome_fasta = Path(".", "pseudogenome.fasta")
-    create_setup_dir(setup_folder)
-    repeat_data = process_annotation(annotation_file, setup_folder, is_bed)
-    generate_pseudogenomes(genome_fasta, pseudo_genome_fasta, flank_length, gap_length, repeat_data, threads)
-    create_magicDB(pseudo_genome_fasta)
+    if not Path(setup_dir).exists():
+        Path(setup_dir).mkdir()
+
+    pseudogenome_file = Path(setup_dir, "pseudogenome.fasta")
+    repeat_data = process_annotation(annotation_file, is_bed, setup_dir)
+    generate_pseudogenomes(genome_fasta, pseudogenome_file, flank_length, gap_length, repeat_data, threads)
+    create_magicDB(pseudogenome_file, setup_dir)
 
 
 if __name__ == '__main__':
