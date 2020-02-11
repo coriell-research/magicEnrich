@@ -5,11 +5,12 @@ Write output to tsv files.
 """
 import argparse
 import shlex
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 
 
-def align_to_pseudogenome(outdir, pseudogenome_db, sample_name, read_type, read_handle, read_handle2, threads, paired_end):
+def align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, read_type, read_handle, read_handle2, threads, paired_end):
     """Align reads to the pseudogenome using magicBLAST"""
     outfile = Path(out_dir, f"__{sample_name}_magicBLAST_results.tab")
 
@@ -17,19 +18,21 @@ def align_to_pseudogenome(outdir, pseudogenome_db, sample_name, read_type, read_
         align_cmd = f"magicblast -sra {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
     elif read_type == "fasta":
         if paired_end:
-            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -no_discordant -splice F -limit_lookup F > {outfile}"
         else:
             align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
     elif read_type == "fastq":
         if paired_end:
-            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -no_discordant -splice F -limit_lookup F > {outfile}"
         else:
             align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
     else:
         raise TypeError("Unknown read_type: must be one of [sra, fasta, fastq]")
     
     # run the alignment
-    subprocess.run(shlex.split(align_cmd), shell = True)
+    print("Aligning sample to the pseudogenome. Handing off to magicblast...")
+    print(f"Effective magicBLAST command:\n{align_cmd}")
+    subprocess.run(align_cmd, shell=True)
 
     return outfile
 
@@ -51,8 +54,9 @@ def combine_counts(counts1, counts2):
     return combined_counts
 
 
-def count_magicBLAST_result(magicBLAST_outfile, id_threshold):
+def count_magicBLAST_result(magicBLAST_outfile, id_threshold, debug):
     """Count the unique, total and fractional counts from the magicBLAST results"""
+    print("Generating counts from alignment to the pseudogenome...")
     uniq_counts = defaultdict(float)
     total_counts = defaultdict(float)
     frac_counts = defaultdict(float)
@@ -83,6 +87,10 @@ def count_magicBLAST_result(magicBLAST_outfile, id_threshold):
                         frac_counts[sub_family] += (1 / N_alignments)
                         counted.add(read_id)
     
+    if not debug:
+        print("Removing large intermediate files...")
+        subprocess.run(f"rm {magicBLAST_outfile}", shell=True)
+
     return uniq_counts, frac_counts, total_counts
 
 
@@ -180,7 +188,7 @@ def main():
     parser.add_argument('--outDirectory', default=".", help="Specify where to save the count results. Defaults to the current directory/sampleName.")
     parser.add_argument('--debug', dest='debug', action='store_true', help='Select this option to prevent the removal of temporary files; useful for debugging.')
     parser.set_defaults(pairedEnd=False, summarize=False, debug=False)
-    parser.parse_args()
+    args = parser.parse_args()
 
     sample_name = args.sampleName
     setup_dir = args.setupDir
@@ -191,11 +199,11 @@ def main():
     threads = args.threads
     paired_end = args.pairedEnd
     summarize_data = args.summarize
-    out_path = arg.outDirectory
+    out_path = args.outDirectory
     debug = args.debug
 
     # setup file i/o ----------------------------------------------------------
-    out_dir = Path(out_path, sample_name)
+    out_dir = Path(out_path, sample_name + "_results")
     pseudogenome_db = Path(setup_dir, "pseudogenome")
     repnames_bedfile = Path(setup_dir, "repnames.bed")
     total_counts_outfile = Path(out_dir, sample_name + "_total_counts.tsv")
@@ -207,6 +215,9 @@ def main():
     family_total_counts_outfile = Path(out_dir, sample_name + "_family_total_counts.tsv")
     family_uniq_counts_outfile = Path(out_dir, sample_name + "_family_unique_counts.tsv")
     family_fractional_counts_outfile = Path(out_dir, sample_name + "_family_fractional_counts.tsv")
+
+    if not out_dir.exists():
+        out_dir.mkdir()
 
     # main routine ------------------------------------------------------------
     res_path = align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, query_type, query, query2, threads, paired_end)
