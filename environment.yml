@@ -1,0 +1,7 @@
+name: magicre
+channels:
+  - bioconda
+  - anaconda
+dependencies:
+  - biopython=1.74
+  - magicblast=1.5.0
