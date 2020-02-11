@@ -1,52 +1,96 @@
 """
-Perform an alignment of reads to the pseudogenome
+Perform an alignment of reads to the pseudogenome,
+Count unique, fractional, and total reads mapped.
+Write output to tsv files.
 """
+import argparse
+import shlex
 from collections import defaultdict
 from pathlib import Path
-import argparse
 
 
-def count(pseudogenome_sam):
-    """Return Unique, fractional and total counts from parsing the pseudogenome"""
-    print("Counting reads overlapped to pseudogenome...")
+def align_to_pseudogenome(pseudogenome_db, sample_name, read_type, read_handle, read_handle2, threads, paired_end, debug):
+    """Align reads to the pseudogenome using magicBLAST"""
+    tmp_dir = Path(Path(pseudogenome_db).parent, "__{sample_name}_tmp"))
+    outfile = Path(tmp_dir, f"__{sample_name}_magicBLAST_results.tab")
+
+    if read_type == "sra":
+        align_cmd = f"magicblast -sra {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+    elif read_type == "fasta":
+        if paired_end:
+            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+        else:
+            align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+    elif read_type == "fastq":
+        if paired_end:
+            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+        else:
+            align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+    else:
+        raise TypeError("Unknown read_type: must be one of [sra, fasta, fastq]")
+    
+    # run the alignment
+    subprocess.run(shlex.split(align_cmd), shell = True)
+
+    if not debug:
+        subprocess.run(f"rm -r {tmp_dir}")
+
+
+def combine_counts(counts1, counts2):
+    """Generic function for combining two dictionaries of count data"""
+    combined_counts = defaultdict(lambda : defaultdict(lambda : defaultdict(float)))
+
+    for class_ in counts1.keys():
+        for family in counts1[class_].keys():
+            for elem in counts1[class_][family].keys():
+                combined_counts[class_][family][elem] += counts1[class_][family][elem]
+        
+    for class_ in counts2.keys():
+        for family in counts2[class_].keys():
+            for elem in counts2[class_][family].keys():
+                combined_counts[class_][family][elem] += counts2[class_][family][elem]
+            
+    return combined_counts
+
+
+def count_magicBLAST_result(magicBLAST_outfile, id_threshold):
+    """Count the unique, total and fractional counts from the magicBLAST results"""
     uniq_counts = defaultdict(float)
     total_counts = defaultdict(float)
-    frac_numerator = defaultdict(lambda: defaultdict(float))
     frac_counts = defaultdict(float)
 
-    # calculate uniq counts and tally multi counts
-    with open(pseudogenome_sam, "r") as sam:
-        for line in sam:
-            if line.startswith("@"):
-                continue  # skip headers
+    with open(magicBLAST_outfile, 'r') as infile:
+        for line in infile:
+            if line.startswith("#"):  # skip header lines
+                continue
             else:
-                l = line.strip().split("\t")
-                read_id = l[0]
-                rep_element = l[2]
-                mapq = int(l[4])
+                l = line.strip().split()
+                read_id =l[0]
+                sub_family = l[1]
+                percent_identity = float(l[2])
+                N_alignments = int(l[17])
 
-                # tally total counts for all rep elemnets in the alignment
-                total_counts[rep_element] += 1
+                # calculate total counts
+                if percent_identity >= id_threshold:
+                    total_counts[sub_family] += 1
+                
+                # calculate unique counts
+                if percent_identity >= id_threshold and N_alignments == 1:
+                    uniq_counts[sub_family] += 1
 
-                if mapq == 255:  # calculate unique counts
-                    uniq_counts[rep_element] += 1
-                else:            # tally the sub families that a read multimaps to
-                    frac_numerator[read_id][rep_element] = 1  # every element gets numerator 1 (even if observed multiple times)
-
-    # calculating fractional counts
-    for read_id in frac_numerator.keys():
-        N_subfamilies = len(frac_numerator[read_id].keys())
-        for sub_family in frac_numerator[read_id].keys():
-            frac_counts[sub_family] += (1 / N_subfamilies)  # frac count == 1 / N_subfamilies read aligns to
-
+                # calculate fractional counts -- still must be combined with uniq counts
+                counted = set()
+                if percent_identity >= id_threshold and N_alignments > 1:
+                    if read_id not in counted:
+                        frac_counts[sub_family] += (1 / N_alignments)
+                        counted.add(read_id)
+    
     return uniq_counts, frac_counts, total_counts
 
 
 def create_element_mapping(repnames_bedfile):
     """Create a mapping of the element names to their classes and families"""
-    print("Creating an element mapping...")
     elem_key = defaultdict(lambda : defaultdict(str))
-
     with open(repnames_bedfile, "r") as bed:
         for line in bed:
             l = line.strip().split("\t")
@@ -60,12 +104,11 @@ def create_element_mapping(repnames_bedfile):
 
 
 def map_counts(multi_counts, element_mapper):
-    """Create a dictionary of multi-mapped reads using the class > family > element hierarchy.
-    Since the output from the count_multi function returns element names and their counts, 
-    these element names must be re-associated with the classes and families they are part of. This 
-    association is performed by the element_mapper.
+    """Create a dictionary of reads using the class > family > element hierarchy.
+    Since the output from the alignment step function returns element names and their counts, 
+    these element names must be re-associated with the classes and families they are part of. 
+    This association is performed by the element_mapper.
     """
-    print("Mapping sub-family counts back to their classes and families...")
     hierarchy = defaultdict(lambda : defaultdict(lambda : defaultdict(float)))
     for elem in multi_counts.keys():
         class_ = element_mapper[elem]['class']
@@ -73,17 +116,6 @@ def map_counts(multi_counts, element_mapper):
         hierarchy[class_][family][elem] += multi_counts[elem]
 
     return hierarchy
-
-
-def write_output(count_data, outfile):
-    """Write count data to the outfile. Output truncates floats to ints."""
-    print(f"Writing results to {outfile}...")
-    with open(outfile, "w") as f:
-        for class_ in count_data:
-            for family in count_data[class_]:
-                for elem in count_data[class_][family]:
-                    count = int(count_data[class_][family][elem])
-                    f.write(f"{class_}\t{family}\t{elem}\t{count}\n")
 
 
 def summarize(count_data):
@@ -126,49 +158,17 @@ def write_family_summary(family_counts, outfile):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="count_from_pseudoalignment.py",
-                                    usage="count_from_pseudoalignment.py file_prefix in.sam repnames.bed")
-    parser.add_argument('file_prefix', help="Sample name to prefix the results files with")
-    parser.add_argument('in_sam', help="SAM file of reads aligned to the pseudogenome")
-    parser.add_argument('annotation_file', help="bedfile of repeat annotation file")
-    args = parser.parse_args()
-
-    file_prefix = args.file_prefix
-    samfile = args.in_sam
-    repnames_bed = args.annotation_file
-
-    # Set up outfile names-----------------------------------------------------
-    sam_parent = Path(samfile).parent
-    uniq_out = Path(sam_parent, f"{file_prefix}_unique_counts.tsv")
-    frac_out = Path(sam_parent, f"{file_prefix}_fractional_counts.tsv")
-    total_out = Path(sam_parent, f"{file_prefix}_total_counts.tsv")
-    uniq_family_out = Path(sam_parent, f"{file_prefix}_family_unique_counts.tsv")
-    frac_family_out = Path(sam_parent, f"{file_prefix}_family_fractional_counts.tsv")
-    total_family_out = Path(sam_parent, f"{file_prefix}_family_total_counts.tsv")
-    uniq_class_out = Path(sam_parent, f"{file_prefix}_class_unique_counts.tsv")
-    frac_class_out = Path(sam_parent, f"{file_prefix}_class_fractional_counts.tsv")
-    total_class_out = Path(sam_parent, f"{file_prefix}_class_total_counts.tsv")
-
-    uniq, frac, tot = count(samfile)
-    elem_mapper = create_element_mapping(repnames_bed)
-    uniq_counts = map_counts(uniq, elem_mapper)
-    frac_counts = map_counts(frac, elem_mapper)
-    total_counts = map_counts(tot, elem_mapper)
-
-    write_output(uniq_counts, uniq_out)
-    write_output(frac_counts, frac_out)
-    write_output(total_counts, total_out)
-
-    class_total, family_total = summarize(total_counts)
-    class_uniq, family_uniq = summarize(uniq_counts)
-    class_fractional, family_fractional = summarize(frac_counts)
-
-    write_class_summary(class_total, total_class_out)
-    write_class_summary(class_uniq, uniq_class_out)
-    write_class_summary(class_fractional, frac_class_out)
-    write_family_summary(family_total, total_family_out)
-    write_family_summary(family_uniq, uniq_family_out)
-    write_family_summary(family_fractional, frac_family_out)
+    parser = argparse.ArgumentParser(description="Align reads to pseudogenome using magicBLAST and return counts of repeat elements")
+    parser.add_argument('sampleName', help='The name of the sample to be processed.')
+    parser.add_argument('setupDir', help="Path to the magicRE_Setup directory.")
+    parser.add_argument('readType', help='Defines the input format to be aligned. One of [SRA, fasta, fastq]. Defines the input format to be aligned.', choices=['SRA', 'fasta', 'fastq'])
+    parser.add_argument('--percentIdentity', default=90, type=float, help='Threshold at which to include mapped reads in the count data. Mapped reads must be >= percentIdentity to be included.')
+    parser.add_argument('--threads', default=1, type=int, help='Number of threads to use for alignment.')
+    parser.add_argument('--pairedEnd', dest='pairedEnd', action='store_true', help='Designate this option for paired-end sequencing.')
+    parser.add_argument('--summarize', dest='summarize', action='store_true', help='In addition to the repeat name level output, produce collapsed counts at the class and family levels for each of the count types.')
+    parser.add_argument('--debug', dest='debug', action='store_true', help='Select this option to prevent the removal of temporary files; useful for debugging')
+    parser.set_defaults(pairedEnd=False, summarize=False, debug=False)
+    parser.parse_args()
 
 
 if __name__ == '__main__':
