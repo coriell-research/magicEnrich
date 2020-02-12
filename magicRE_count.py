@@ -10,22 +10,22 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, read_type, read_handle, read_handle2, threads, paired_end):
+def align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, read_type, read_handle, read_handle2, threads, paired_end, max_words):
     """Align reads to the pseudogenome using magicBLAST"""
     outfile = Path(out_dir, f"__{sample_name}_magicBLAST_results.tab")
 
     if read_type == "sra":
-        align_cmd = f"magicblast -sra {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+        align_cmd = f"magicblast -sra {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -max_db_word_count {max_words} > {outfile}"
     elif read_type == "fasta":
         if paired_end:
-            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -no_discordant -splice F -limit_lookup F > {outfile}"
+            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -no_discordant -splice F -max_db_word_count {max_words} > {outfile}"
         else:
-            align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+            align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -num_threads {threads} -outfmt tabular -no_unaligned -splice F -max_db_word_count {max_words} > {outfile}"
     elif read_type == "fastq":
         if paired_end:
-            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -no_discordant -splice F -limit_lookup F > {outfile}"
+            align_cmd = f"magicblast -query {read_handle} -query_mate {read_handle2} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -no_discordant -splice F -max_db_word_count {max_words} > {outfile}"
         else:
-            align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -splice F -limit_lookup F > {outfile}"
+            align_cmd = f"magicblast -query {read_handle} -db {pseudogenome_db} -infmt fastq -num_threads {threads} -outfmt tabular -no_unaligned -splice F -max_db_word_count {max_words} > {outfile}"
     else:
         raise TypeError("Unknown read_type: must be one of [sra, fasta, fastq]")
     
@@ -187,6 +187,7 @@ def main():
     parser.add_argument('--summarize', dest='summarize', action='store_true', help='In addition to the repeat name level output, produce collapsed counts at the class and family levels for each of the count types.')
     parser.add_argument('--outDirectory', default=".", help="Specify where to save the count results. Defaults to the current directory/sampleName.")
     parser.add_argument('--debug', dest='debug', action='store_true', help='Select this option to prevent the removal of temporary files; useful for debugging.')
+    parser.add_argument('--maxWords', default=9999999, type=int, metavar='9999999', help='16-base words that appear in the genome more than this number of times will be filtered. This is a work-around for setting -limit_lookup F (allowing repeats) since setting -limit_lookup F in the alignment command results in the process being killed.')
     parser.set_defaults(pairedEnd=False, summarize=False, debug=False)
     args = parser.parse_args()
 
@@ -200,6 +201,7 @@ def main():
     paired_end = args.pairedEnd
     summarize_data = args.summarize
     out_path = args.outDirectory
+    max_words = args.maxWords
     debug = args.debug
 
     # setup file i/o ----------------------------------------------------------
@@ -220,7 +222,7 @@ def main():
         out_dir.mkdir(parents=True)
 
     # main routine ------------------------------------------------------------
-    res_path = align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, query_type, query, query2, threads, paired_end)
+    res_path = align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, query_type, query, query2, threads, paired_end, max_words)
     raw_uniq, raw_frac, raw_total = count_magicBLAST_result(res_path, perc_id, debug)
     elem_mapper = create_element_mapping(repnames_bedfile)
     uniq_counts = map_counts(raw_uniq, elem_mapper)
