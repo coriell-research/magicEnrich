@@ -221,7 +221,7 @@ def main():
 
     # main routine ------------------------------------------------------------
     res_path = align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, query_type, query, query2, threads, paired_end)
-    raw_uniq, raw_frac, raw_total = count_magicBLAST_result(res_path, perc_id)
+    raw_uniq, raw_frac, raw_total = count_magicBLAST_result(res_path, perc_id, debug)
     elem_mapper = create_element_mapping(repnames_bedfile)
     uniq_counts = map_counts(raw_uniq, elem_mapper)
     frac_counts = map_counts(raw_frac, elem_mapper)
