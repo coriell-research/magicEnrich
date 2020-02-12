@@ -181,7 +181,7 @@ def main():
     parser.add_argument('queryType', default='fastq', choices=['sra', 'fasta', 'fastq'], help='Defines the input format to be aligned. One of [SRA, fasta, fastq]. Defines the input format to be aligned.')
     parser.add_argument('query', help="Either the SRA accession number or the path to the fasta or fastq file to be aligned to the pseudogenome.")
     parser.add_argument('--query2', default=None, help="If pairedEnd is set, designate this to be the path to second read pair.")
-    parser.add_argument('--percentIdentity', default=90, type=float, help='Threshold at which to include mapped reads in the count data. Mapped reads must be >= percentIdentity to be included.')
+    parser.add_argument('--percentIdentity', default=90, type=float, metavar='90.0', help='Threshold at which to include mapped reads in the count data. Mapped reads must be >= percentIdentity to be included.')
     parser.add_argument('--threads', default=1, type=int, help='Number of threads to use for alignment.')
     parser.add_argument('--pairedEnd', dest='pairedEnd', action='store_true', help='Designate this option for paired-end sequencing.')
     parser.add_argument('--summarize', dest='summarize', action='store_true', help='In addition to the repeat name level output, produce collapsed counts at the class and family levels for each of the count types.')
@@ -217,7 +217,7 @@ def main():
     family_fractional_counts_outfile = Path(out_dir, sample_name + "_family_fractional_counts.tsv")
 
     if not out_dir.exists():
-        out_dir.mkdir()
+        out_dir.mkdir(parents=True)
 
     # main routine ------------------------------------------------------------
     res_path = align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, query_type, query, query2, threads, paired_end)
