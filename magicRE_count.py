@@ -203,7 +203,7 @@ def main():
     debug = args.debug
 
     # setup file i/o ----------------------------------------------------------
-    out_dir = Path(out_path, sample_name + "_results")
+    out_dir = Path(out_path, sample_name + "_magicRE_results")
     pseudogenome_db = Path(setup_dir, "pseudogenome")
     repnames_bedfile = Path(setup_dir, "repnames.bed")
     total_counts_outfile = Path(out_dir, sample_name + "_total_counts.tsv")
