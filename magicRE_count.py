@@ -60,6 +60,8 @@ def count_magicBLAST_result(magicBLAST_outfile, id_threshold, debug):
     uniq_counts = defaultdict(float)
     total_counts = defaultdict(float)
     frac_counts = defaultdict(float)
+    read_counts = defaultdict(lambda: defaultdict(float))
+    prop_counts = defaultdict(float)
 
     with open(magicBLAST_outfile, 'r') as infile:
         for line in infile:
@@ -86,12 +88,25 @@ def count_magicBLAST_result(magicBLAST_outfile, id_threshold, debug):
                     if read_id not in counted:
                         frac_counts[sub_family] += (1 / N_alignments)
                         counted.add(read_id)
-    
+
+                # count the sub families proportionally
+                if percent_identity >= id_threshold and N_alignments > 1:
+                    read_counts[read_id][sub_family] += 1
+                    read_counts[read_id]['N'] = N_alignments
+
+    # calculate the proportional counts
+    for read_id in read_counts:
+        for sub_family in read_counts[read_id]:
+            if sub_family == 'N':
+                continue
+            prop_counts[sub_family] += read_counts[read_id][sub_family] / read_counts[read_id]['N']
+
+    # remove the large intermediate files
     if not debug:
         print("Removing large intermediate files...")
         subprocess.run(f"rm {magicBLAST_outfile}", shell=True)
 
-    return uniq_counts, frac_counts, total_counts
+    return uniq_counts, frac_counts, total_counts, prop_counts
 
 
 def create_element_mapping(repnames_bedfile):
@@ -208,40 +223,51 @@ def main():
     repnames_bedfile = Path(setup_dir, "repnames.bed")
     total_counts_outfile = Path(out_dir, sample_name + "_total_counts.tsv")
     uniq_counts_outfile = Path(out_dir, sample_name + "_unique_counts.tsv")
+    prop_counts_outfile = Path(out_dir, sample_name + "_propFractional_counts.tsv")
     fractional_counts_outfile = Path(out_dir, sample_name + "_fractional_counts.tsv")
     class_total_counts_outfile = Path(out_dir, sample_name + "_class_total_counts.tsv")
     class_uniq_counts_outfile = Path(out_dir, sample_name + "_class_unique_counts.tsv")
     class_fractional_counts_outfile = Path(out_dir, sample_name + "_class_fractional_counts.tsv")
+    class_prop_counts_outfile = Path(out_dir, sample_name + "_class_propFractional_counts.tsv")
     family_total_counts_outfile = Path(out_dir, sample_name + "_family_total_counts.tsv")
     family_uniq_counts_outfile = Path(out_dir, sample_name + "_family_unique_counts.tsv")
     family_fractional_counts_outfile = Path(out_dir, sample_name + "_family_fractional_counts.tsv")
+    family_prop_counts_outfile = Path(out_dir, sample_name + "_family_propFractional_counts.tsv")
 
     if not out_dir.exists():
         out_dir.mkdir(parents=True)
 
     # main routine ------------------------------------------------------------
     res_path = align_to_pseudogenome(out_dir, pseudogenome_db, sample_name, query_type, query, query2, threads, paired_end)
-    raw_uniq, raw_frac, raw_total = count_magicBLAST_result(res_path, perc_id, debug)
+    raw_uniq, raw_frac, raw_total, raw_prop = count_magicBLAST_result(res_path, perc_id, debug)
     elem_mapper = create_element_mapping(repnames_bedfile)
     uniq_counts = map_counts(raw_uniq, elem_mapper)
     frac_counts = map_counts(raw_frac, elem_mapper)
     total_counts = map_counts(raw_total, elem_mapper)
+    prop_counts = map_counts(raw_prop, elem_mapper)
     fractional_counts = combine_counts(uniq_counts, frac_counts)  # fractional counts must be combined with unique counts before writing out
+    prop_frac_counts = combine_counts(uniq_counts, prop_counts)
     write_output(fractional_counts, fractional_counts_outfile)
     write_output(total_counts, total_counts_outfile)
     write_output(uniq_counts, uniq_counts_outfile)
+    write_output(prop_frac_counts, prop_counts_outfile)
 
     if summarize_data:
         print("Writing class-level and family-level summarized counts...")
         class_total, family_total = summarize(total_counts)
         class_uniq, family_uniq = summarize(uniq_counts)
         class_fractional, family_fractional = summarize(fractional_counts)
+        class_prop, family_prop = summarize(prop_frac_counts)
+
         write_class_summary(class_total, class_total_counts_outfile)
         write_class_summary(class_uniq, class_uniq_counts_outfile)
         write_class_summary(class_fractional, class_fractional_counts_outfile)
+        write_class_summary(class_prop, class_prop_counts_outfile)
+
         write_family_summary(family_total, family_total_counts_outfile)
         write_family_summary(family_uniq, family_uniq_counts_outfile)
         write_family_summary(family_fractional, family_fractional_counts_outfile)
+        write_family_summary(family_prop, family_prop_counts_outfile)
 
 
 if __name__ == '__main__':
